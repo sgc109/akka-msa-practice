@@ -1,11 +1,21 @@
 package shopping.cart
 
-import akka.actor.typed.{ActorRef, ActorSystem, Behavior, SupervisorStrategy}
-import akka.cluster.sharding.typed.scaladsl.{ClusterSharding, Entity, EntityTypeKey}
+import akka.actor.typed.{ ActorRef, ActorSystem, Behavior, SupervisorStrategy }
+import akka.cluster.sharding.typed.scaladsl.{
+  ClusterSharding,
+  Entity,
+  EntityTypeKey
+}
 import akka.pattern.StatusReply
 import akka.persistence.typed.PersistenceId
-import akka.persistence.typed.scaladsl.{Effect, EventSourcedBehavior, ReplyEffect, RetentionCriteria}
+import akka.persistence.typed.scaladsl.{
+  Effect,
+  EventSourcedBehavior,
+  ReplyEffect,
+  RetentionCriteria
+}
 
+import java.time.Instant
 import scala.concurrent.duration.DurationInt
 
 object ShoppingCart {
@@ -15,18 +25,40 @@ object ShoppingCart {
   final case class AddItem(
       itemId: String,
       quantity: Int,
-      replyTo: ActorRef[StatusReply[Summary]]) extends Command
+      replyTo: ActorRef[StatusReply[Summary]])
+      extends Command
 
-  final case class Summary(items: Map[String, Int]) extends CborSerializable
+  final case class Checkout(replyTo: ActorRef[StatusReply[Summary]])
+      extends Command
+
+  final case class Get(replyTo: ActorRef[Summary]) extends Command
+
+  final case class AdjustItemQuantity(
+      itemId: String,
+      quantity: Int,
+      replyTo: ActorRef[StatusReply[Summary]])
+      extends Command
+
+  final case class Summary(items: Map[String, Int], checkedOut: Boolean)
+      extends CborSerializable
 
   sealed trait Event extends CborSerializable {
     def cartId: String
   }
 
-  final case class ItemAdded(cartId: String, itemId: String, quantity: Int) extends Event
+  final case class ItemAdded(cartId: String, itemId: String, quantity: Int)
+      extends Event
 
-  final case class State(items: Map[String, Int]) extends CborSerializable {
+  final case class CheckedOut(cartId: String, eventTime: Instant) extends Event
 
+  final case class ItemQuantityAdjusted(
+      cartId: String,
+      itemId: String,
+      quantity: Int)
+      extends Event
+
+  final case class State(items: Map[String, Int], checkoutDate: Option[Instant])
+      extends CborSerializable {
     def hasItem(itemId: String): Boolean = items.contains(itemId)
 
     def isEmpty: Boolean = items.isEmpty
@@ -37,13 +69,36 @@ object ShoppingCart {
         case _ => copy(items = items + (itemId -> quantity))
       }
     }
+
+    def isCheckedOut: Boolean =
+      checkoutDate.isDefined
+
+    def checkout(now: Instant): State =
+      copy(checkoutDate = Some(now))
+
+    def adjustItemQuantity(itemId: String, quantity: Int) = {
+      updateItem(itemId, quantity)
+    }
+
+    def toSummary: Summary =
+      Summary(items, isCheckedOut)
   }
 
   object State {
-    val empty: State = State(items = Map.empty)
+    val empty: State = State(items = Map.empty, checkoutDate = None)
   }
 
   private def handleCommand(
+      cartId: String,
+      state: State,
+      command: Command): ReplyEffect[Event, State] = {
+    if (state.isCheckedOut)
+      checkedOutShoppingCart(state, command)
+    else
+      openShoppingCart(cartId, state, command)
+  }
+
+  private def openShoppingCart(
       cartId: String,
       state: State,
       command: Command): ReplyEffect[Event, State] = {
@@ -60,8 +115,55 @@ object ShoppingCart {
           Effect
             .persist(ItemAdded(cartId, itemId, quantity))
             .thenReply(replyTo) { updatedCart =>
-              StatusReply.Success(Summary(updatedCart.items))
+              StatusReply.Success(
+                Summary(updatedCart.items, updatedCart.isCheckedOut))
             }
+
+      case Checkout(replyTo) =>
+        if (state.isEmpty)
+          Effect.reply(replyTo)(
+            StatusReply.Error("Cannot checkout an empty shopping cart"))
+        else
+          Effect
+            .persist(CheckedOut(cartId, Instant.now()))
+            .thenReply(replyTo)(updatedCart =>
+              StatusReply.Success(updatedCart.toSummary))
+
+      case Get(replyTo) =>
+        Effect.reply(replyTo)(state.toSummary)
+
+      case AdjustItemQuantity(itemId, quantity, replyTo) =>
+        if (quantity <= 0)
+          Effect.reply(replyTo)(StatusReply.Error("Quantity must be greater than zero"))
+        else
+          Effect
+          .persist(ItemQuantityAdjusted(cartId, itemId, quantity))
+          .thenReply(replyTo) { updatedCart =>
+            StatusReply.Success(Summary(updatedCart.items, updatedCart.isCheckedOut))
+          }
+    }
+  }
+
+  private def checkedOutShoppingCart(
+      state: State,
+      command: Command): ReplyEffect[Event, State] = {
+    command match {
+      case cmd: AddItem =>
+        Effect.reply(cmd.replyTo)(
+          StatusReply.Error(
+            "Can't add an item to an already checked out shopping cart"))
+
+      case cmd: Checkout =>
+        Effect.reply(cmd.replyTo)(
+          StatusReply.Error("Can't checkout already checked out shopping cart"))
+
+      case Get(replyTo) =>
+        Effect.reply(replyTo)(state.toSummary)
+
+      case cmd: AdjustItemQuantity =>
+        Effect.reply(cmd.replyTo)(
+          StatusReply.Error(
+            "Can't adjust item quantity for already checked out shopping cart"))
     }
   }
 
@@ -69,6 +171,10 @@ object ShoppingCart {
     event match {
       case ItemAdded(_, itemId, quantity) =>
         state.updateItem(itemId, quantity)
+      case CheckedOut(_, eventTime) =>
+        state.checkout(eventTime)
+      case ItemQuantityAdjusted(_, itemId, quantity) =>
+        state.adjustItemQuantity(itemId, quantity)
     }
   }
 
@@ -86,7 +192,8 @@ object ShoppingCart {
       .withEnforcedReplies[Command, Event, State](
         persistenceId = PersistenceId(entityKey.name, cartId),
         emptyState = State.empty,
-        commandHandler = (state, command) => handleCommand(cartId, state, command),
+        commandHandler =
+          (state, command) => handleCommand(cartId, state, command),
         eventHandler = (state, event) => handleEvent(state, event))
       .withRetention(RetentionCriteria
         .snapshotEvery(numberOfEvents = 100, keepNSnapshots = 3))
