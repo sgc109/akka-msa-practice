@@ -5,10 +5,16 @@ import akka.grpc.GrpcServiceException
 import akka.util.Timeout
 import io.grpc.Status
 import org.slf4j.LoggerFactory
+import shopping.cart.proto.{
+  GetItemPopularityRequest,
+  GetItemPopularityResponse
+}
 
 import scala.concurrent.{ Future, TimeoutException }
 
-class ShoppingCartServiceImpl(system: ActorSystem[_])
+class ShoppingCartServiceImpl(
+    system: ActorSystem[_],
+    itemPopularityRepository: ItemPopularityRepository)
     extends proto.ShoppingCartService {
   import system.executionContext
 
@@ -81,5 +87,15 @@ class ShoppingCartServiceImpl(system: ActorSystem[_])
       .askWithStatus(ShoppingCart.AdjustItemQuantity(in.itemId, in.quantity, _))
       .map(cart => toProtoCart(cart))
     convertError(response)
+  }
+
+  override def getItemPopularity(
+      in: GetItemPopularityRequest): Future[GetItemPopularityResponse] = {
+    itemPopularityRepository.getItem(in.itemId).map {
+      case Some(count) =>
+        proto.GetItemPopularityResponse(in.itemId, count)
+      case None =>
+        proto.GetItemPopularityResponse(in.itemId, 0L)
+    }
   }
 }

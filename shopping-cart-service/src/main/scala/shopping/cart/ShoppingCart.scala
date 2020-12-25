@@ -4,6 +4,7 @@ import akka.actor.typed.{ ActorRef, ActorSystem, Behavior, SupervisorStrategy }
 import akka.cluster.sharding.typed.scaladsl.{
   ClusterSharding,
   Entity,
+  EntityContext,
   EntityTypeKey
 }
 import akka.pattern.StatusReply
@@ -134,13 +135,15 @@ object ShoppingCart {
 
       case AdjustItemQuantity(itemId, quantity, replyTo) =>
         if (quantity <= 0)
-          Effect.reply(replyTo)(StatusReply.Error("Quantity must be greater than zero"))
+          Effect.reply(replyTo)(
+            StatusReply.Error("Quantity must be greater than zero"))
         else
           Effect
-          .persist(ItemQuantityAdjusted(cartId, itemId, quantity))
-          .thenReply(replyTo) { updatedCart =>
-            StatusReply.Success(Summary(updatedCart.items, updatedCart.isCheckedOut))
-          }
+            .persist(ItemQuantityAdjusted(cartId, itemId, quantity))
+            .thenReply(replyTo) { updatedCart =>
+              StatusReply.Success(
+                Summary(updatedCart.items, updatedCart.isCheckedOut))
+            }
     }
   }
 
@@ -181,13 +184,19 @@ object ShoppingCart {
   val entityKey: EntityTypeKey[Command] =
     EntityTypeKey[Command]("ShoppingCart")
 
+  val tags = Vector.tabulate(5)(i => s"carts-$i")
+
   def init(system: ActorSystem[_]): Unit = {
-    ClusterSharding(system).init(Entity(entityKey) { entityContext =>
-      ShoppingCart(entityContext.entityId)
-    })
+    val behaviorFactory: EntityContext[Command] => Behavior[Command] = {
+      entityContext =>
+        val i = math.abs(entityContext.entityId.hashCode % tags.size)
+        val selectedTag = tags(i)
+        ShoppingCart(entityContext.entityId, selectedTag)
+    }
+    ClusterSharding(system).init(Entity(entityKey)(behaviorFactory))
   }
 
-  def apply(cartId: String): Behavior[Command] = {
+  def apply(cartId: String, projectionTag: String): Behavior[Command] = {
     EventSourcedBehavior
       .withEnforcedReplies[Command, Event, State](
         persistenceId = PersistenceId(entityKey.name, cartId),
@@ -195,6 +204,7 @@ object ShoppingCart {
         commandHandler =
           (state, command) => handleCommand(cartId, state, command),
         eventHandler = (state, event) => handleEvent(state, event))
+      .withTagger(_ => Set(projectionTag))
       .withRetention(RetentionCriteria
         .snapshotEvery(numberOfEvents = 100, keepNSnapshots = 3))
       .onPersistFailure(
