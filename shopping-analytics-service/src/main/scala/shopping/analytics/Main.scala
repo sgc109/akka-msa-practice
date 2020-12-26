@@ -1,10 +1,7 @@
 package shopping.analytics
 
-import akka.actor.typed.scaladsl.AbstractBehavior
-import akka.actor.typed.scaladsl.ActorContext
-import akka.actor.typed.scaladsl.Behaviors
-import akka.actor.typed.ActorSystem
-import akka.actor.typed.Behavior
+import akka.actor.typed.{ActorSystem, Behavior}
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
 import akka.management.cluster.bootstrap.ClusterBootstrap
 import akka.management.scaladsl.AkkaManagement
 
@@ -20,11 +17,13 @@ object Main {
 }
 
 class Main(context: ActorContext[Nothing])
-    extends AbstractBehavior[Nothing](context) {
-  val system = context.system
+  extends AbstractBehavior[Nothing](context) {
+  val system: ActorSystem[_] = context.system
 
   AkkaManagement(system).start()
   ClusterBootstrap(system).start()
+
+  ShoppingCartEventConsumer.init(system)
 
   override def onMessage(msg: Nothing): Behavior[Nothing] =
     this
