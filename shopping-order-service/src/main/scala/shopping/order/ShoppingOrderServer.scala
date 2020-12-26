@@ -1,4 +1,4 @@
-package shopping.cart
+package shopping.order
 
 import akka.actor.typed.ActorSystem
 import akka.grpc.scaladsl.{ ServerReflection, ServiceHandler }
@@ -9,32 +9,30 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.{ Failure, Success }
 
-object ShoppingCartServer {
-
+object ShoppingOrderServer {
   def start(
       interface: String,
       port: Int,
       system: ActorSystem[_],
-      grpcService: proto.ShoppingCartService): Unit = {
+      grpcService: proto.ShoppingOrderService): Unit = {
     implicit val sys: ActorSystem[_] = system
     implicit val ec: ExecutionContext = system.executionContext
 
     val service: HttpRequest => Future[HttpResponse] =
       ServiceHandler.concatOrNotFound(
-        proto.ShoppingCartServiceHandler.partial(grpcService),
-        ServerReflection.partial(List(proto.ShoppingCartService)))
+        proto.ShoppingOrderServiceHandler.partial(grpcService),
+        ServerReflection.partial(List(proto.ShoppingOrderService)))
 
-    val bound =
-      Http()
-        .newServerAt(interface, port)
-        .bind(service)
-        .map(_.addToCoordinatedShutdown(3.seconds))
+    val bound = Http()
+      .newServerAt(interface, port)
+      .bind(service)
+      .map(_.addToCoordinatedShutdown(3.seconds))
 
     bound.onComplete {
       case Success(binding) =>
         val address = binding.localAddress
         system.log.info(
-          "Shopping online at gRPC server {}:{}",
+          "Shopping order at gRPC server {}:{}",
           address.getHostString,
           address.getPort)
       case Failure(ex) =>

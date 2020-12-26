@@ -28,7 +28,7 @@ class ShoppingCartServiceImpl(
 
   override def addItem(in: proto.AddItemRequest): Future[proto.Cart] = {
     logger.info("addItem {} to cart {}", in.itemId, in.cartId)
-    val entityRef = sharding.entityRefFor(ShoppingCart.entityKey, in.cartId)
+    val entityRef = sharding.entityRefFor(ShoppingCart.EntityKey, in.cartId)
     val reply: Future[ShoppingCart.Summary] =
       entityRef.askWithStatus(ShoppingCart.AddItem(in.itemId, in.quantity, _))
     val response = reply.map(cart => toProtoCart(cart))
@@ -58,7 +58,7 @@ class ShoppingCartServiceImpl(
 
   override def checkout(in: proto.CheckoutRequest): Future[proto.Cart] = {
     logger.info("checkout {}", in.cartId)
-    val entityRef = sharding.entityRefFor(ShoppingCart.entityKey, in.cartId)
+    val entityRef = sharding.entityRefFor(ShoppingCart.EntityKey, in.cartId)
     val reply: Future[ShoppingCart.Summary] =
       entityRef.askWithStatus(ShoppingCart.Checkout)
     val response = reply.map(cart => toProtoCart(cart))
@@ -67,7 +67,7 @@ class ShoppingCartServiceImpl(
 
   override def getCart(in: proto.GetCartRequest): Future[proto.Cart] = {
     logger.info("getCart {}", in.cartId)
-    val entityRef = sharding.entityRefFor(ShoppingCart.entityKey, in.cartId)
+    val entityRef = sharding.entityRefFor(ShoppingCart.EntityKey, in.cartId)
     val response =
       entityRef.ask(ShoppingCart.Get).map { cart =>
         if (cart.items.isEmpty)
@@ -82,7 +82,7 @@ class ShoppingCartServiceImpl(
 
   override def updateItem(in: proto.UpdateItemRequest): Future[proto.Cart] = {
     logger.info("updateItem {} of {} to {}", in.itemId, in.cartId, in.quantity)
-    val entityRef = sharding.entityRefFor(ShoppingCart.entityKey, in.cartId)
+    val entityRef = sharding.entityRefFor(ShoppingCart.EntityKey, in.cartId)
     val response = entityRef
       .askWithStatus(ShoppingCart.AdjustItemQuantity(in.itemId, in.quantity, _))
       .map(cart => toProtoCart(cart))
